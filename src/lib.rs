@@ -131,6 +131,25 @@ where
         });
         Parser::new(name, raw_parser)
     }
+
+    pub fn or(self, right: Parser<T>) -> Parser<T> {
+        let name = format!("{} or {}", self.name, right.name);
+        let raw_parser = Box::new(move |pos, ctx: &mut Context| {
+            let e1 = match self.parse(pos, ctx) {
+                ok @ Ok(_) => return ok,
+                Err(e) => e,
+            };
+
+            let e2 = match right.parse(pos, ctx) {
+                ok @ Ok(_) => return ok,
+                Err(e) => e,
+            };
+
+            if e1.pos >= e2.pos { Err(e1) } else { Err(e2) }
+        });
+
+        Parser::new(name, raw_parser)
+    }
 }
 
 pub fn satisfy(name: impl Into<String>, f: impl Fn(char) -> bool + 'static) -> Parser<char> {
@@ -247,6 +266,22 @@ mod test {
         let ctx = &mut Context::new("1c");
         assert_eq!(p.parse(0, ctx), Ok((1, '1')));
         let ctx = &mut Context::new("abc");
+        assert!(p.parse(0, ctx).is_err());
+        let ctx = &mut Context::new("");
+        assert!(p.parse(0, ctx).is_err());
+    }
+
+    #[test]
+    fn test_or() {
+        let digit = satisfy("digit", |c| c.is_ascii_digit());
+        let a = char('a');
+        let p = a.or(digit);
+
+        let ctx = &mut Context::new("abc");
+        assert_eq!(p.parse(0, ctx), Ok((1, 'a')));
+        let ctx = &mut Context::new("1bc");
+        assert_eq!(p.parse(0, ctx), Ok((1, '1')));
+        let ctx = &mut Context::new("bcd");
         assert!(p.parse(0, ctx).is_err());
         let ctx = &mut Context::new("");
         assert!(p.parse(0, ctx).is_err());
