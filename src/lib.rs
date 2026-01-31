@@ -1,3 +1,4 @@
+use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{any::Any, collections::HashMap};
 
@@ -14,10 +15,16 @@ pub struct ParseError {
 }
 
 type ParseResult<T> = Result<(Pos, T), ParseError>;
-type RawParser<T> = Box<dyn Fn(Pos, &mut Context) -> ParseResult<T>>;
+type RawParser<T> = Rc<dyn Fn(Pos, &mut Context) -> ParseResult<T>>;
+
+#[derive(Debug, Clone)]
+enum Entry<T> {
+    Seed(ParseResult<T>),
+    Fixed(ParseResult<T>),
+}
 
 pub struct Context {
-    cache: HashMap<(ParserId, Pos), Box<dyn Any>>,
+    cache: HashMap<(ParserId, Pos), Rc<dyn Any>>,
     source: String,
 }
 
@@ -30,6 +37,7 @@ impl Context {
     }
 }
 
+#[derive(Clone)]
 pub struct Parser<T> {
     name: String,
     id: ParserId,
@@ -49,21 +57,59 @@ where
     }
 
     pub fn parse(&self, pos: Pos, ctx: &mut Context) -> ParseResult<T> {
+        println!(
+            ">>> parse called:\n    id: {}\n    name: {}\n    pos: {}",
+            self.id, self.name, pos
+        );
         let key = (self.id, pos);
-        if let Some(v) = ctx.cache.get(&key) {
-            return v.downcast_ref::<ParseResult<T>>().cloned().unwrap();
+        if let Some(cached) = ctx.cache.get(&key) {
+            let entry = cached.downcast_ref::<Entry<T>>().cloned().unwrap();
+            match entry {
+                Entry::Seed(res) | Entry::Fixed(res) => {
+                    println!("\tcache hit {:?}", key);
+                    match &res {
+                        Ok((pos, _)) => println!("\t{}", pos),
+                        Err(err) => println!("\t{}, {}", err.pos, err.reason),
+                    }
+                    return res;
+                }
+            }
         }
 
-        let r = (self.raw_parser)(pos, ctx);
-        ctx.cache.insert(key, Box::new(r.clone()));
-        r
+        println!("\tcache miss {:?}", key);
+
+        let mut best_pos = pos;
+        let mut best_res = Err(ParseError {
+            source: ctx.source.clone(),
+            pos,
+            reason: String::from("Initial placeholder"),
+        });
+
+        println!("\tcaching initial for {:?}", key);
+        ctx.cache
+            .insert(key, Rc::new(Entry::Seed(best_res.clone())));
+
+        while let Ok((new_pos, val)) = (self.raw_parser)(pos, ctx)
+            && (dbg!(best_pos) < dbg!(new_pos) || (best_pos == new_pos && best_res.is_err()))
+        {
+            best_pos = new_pos;
+            best_res = Ok((new_pos, val));
+            println!("\tcaching seed for {:?}", key);
+            ctx.cache
+                .insert(key, Rc::new(Entry::Seed(best_res.clone())));
+        }
+
+        println!("\tcaching fixed for {:?}", key);
+        ctx.cache
+            .insert(key, Rc::new(Entry::Fixed(best_res.clone())));
+        best_res
     }
 
     pub fn map<S: Clone + 'static>(self, f: impl Fn(T) -> S + 'static) -> Parser<S> {
         let Parser {
             name, raw_parser, ..
         } = self;
-        let raw_parser = Box::new(move |pos, ctx: &mut Context| {
+        let raw_parser = Rc::new(move |pos, ctx: &mut Context| {
             let (pos, val) = raw_parser(pos, ctx)?;
             Ok((pos, f(val)))
         });
@@ -74,7 +120,7 @@ where
         let Parser {
             name, raw_parser, ..
         } = self;
-        let raw_parser = Box::new(move |pos, ctx: &mut Context| {
+        let raw_parser = Rc::new(move |pos, ctx: &mut Context| {
             let (pos, val) = raw_parser(pos, ctx)?;
             let Some(val) = f(val) else {
                 return Err(ParseError {
@@ -89,8 +135,8 @@ where
     }
 
     pub fn and<S: Clone + 'static>(self, right: Parser<S>) -> Parser<(T, S)> {
-        let name = format!("{} and {}", self.name, right.name);
-        let raw_parser = Box::new(move |pos, ctx: &mut Context| {
+        let name = format!("({} and {})", self.name, right.name);
+        let raw_parser = Rc::new(move |pos, ctx: &mut Context| {
             let (pos, left_result) = self.parse(pos, ctx)?;
             let (pos, right_result) = right.parse(pos, ctx)?;
             Ok((pos, (left_result, right_result)))
@@ -107,8 +153,8 @@ where
     }
 
     pub fn many(self) -> Parser<Vec<T>> {
-        let name = format!("many {}", self.name);
-        let raw_parser = Box::new(move |pos, ctx: &mut Context| {
+        let name = format!("(many {})", self.name);
+        let raw_parser = Rc::new(move |pos, ctx: &mut Context| {
             let mut acc = Vec::new();
             let mut pos = pos;
 
@@ -124,8 +170,8 @@ where
     }
 
     pub fn opt(self) -> Parser<Option<T>> {
-        let name = format!("optional {}", self.name);
-        let raw_parser = Box::new(move |pos, ctx: &mut Context| match self.parse(pos, ctx) {
+        let name = format!("(optional {})", self.name);
+        let raw_parser = Rc::new(move |pos, ctx: &mut Context| match self.parse(pos, ctx) {
             Ok((pos, val)) => Ok((pos, Some(val))),
             Err(_) => Ok((pos, None)),
         });
@@ -133,8 +179,8 @@ where
     }
 
     pub fn or(self, right: Parser<T>) -> Parser<T> {
-        let name = format!("{} or {}", self.name, right.name);
-        let raw_parser = Box::new(move |pos, ctx: &mut Context| {
+        let name = format!("({} or {})", self.name, right.name);
+        let raw_parser = Rc::new(move |pos, ctx: &mut Context| {
             let e1 = match self.parse(pos, ctx) {
                 ok @ Ok(_) => return ok,
                 Err(e) => e,
@@ -156,7 +202,7 @@ pub fn satisfy(name: impl Into<String>, f: impl Fn(char) -> bool + 'static) -> P
     let name = name.into();
     let raw_parser = {
         let name = name.clone();
-        Box::new(
+        Rc::new(
             move |pos, ctx: &mut Context| match ctx.source.chars().nth(pos) {
                 Some(c) if f(c) => Ok((pos + 1, c)),
                 Some(c) => Err(ParseError {
@@ -181,7 +227,33 @@ pub fn any_char() -> Parser<char> {
 }
 
 pub fn char(c: char) -> Parser<char> {
-    satisfy(format!("char {}", c), move |x| x == c)
+    satisfy(format!("(char '{}')", c), move |x| x == c)
+}
+
+pub fn lazy<T: Clone + 'static>(
+    name: impl Into<String>,
+    get_parser: impl Fn(Parser<T>) -> Parser<T> + 'static,
+) -> Parser<T> {
+    use std::cell::OnceCell;
+    use std::rc::Rc;
+
+    let name = name.into();
+    let cell = Rc::new(OnceCell::new());
+    let cell_for_parse = cell.clone();
+
+    let placeholder = Parser::new(
+        name,
+        Rc::new(move |pos, ctx: &mut Context| {
+            let real: &Parser<T> = cell_for_parse.get().expect("uninitialized lazy parser");
+            real.parse(pos, ctx)
+        }),
+    );
+
+    let real = get_parser(placeholder.clone());
+
+    let _ = cell.set(real);
+
+    placeholder
 }
 
 #[cfg(test)]

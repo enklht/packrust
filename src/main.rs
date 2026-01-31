@@ -1,5 +1,6 @@
 use packrat::*;
 
+#[derive(Debug, Clone)]
 enum Operator {
     Add,
     Sub,
@@ -7,6 +8,7 @@ enum Operator {
     Div,
 }
 
+#[derive(Debug, Clone)]
 enum Expr {
     Binary {
         op: Operator,
@@ -31,8 +33,28 @@ impl Expr {
 }
 
 fn main() {
-    let a = satisfy("char a", |c| c == 'a');
+    let a = char('a').map(|_| Expr::Literal(1));
 
-    let mut ctx = Context::new("abc");
-    println!("{:?}", a.parse(0, &mut ctx))
+    let expr = lazy("expr", move |expr| {
+        a.clone()
+            .andl(char('+'))
+            .and(expr)
+            .map(|(left, right)| Expr::Binary {
+                op: Operator::Add,
+                left: Box::new(left),
+                right: Box::new(right),
+            })
+            .or(a.clone())
+        // expr.andl(char('+'))
+        //     .and(a.clone())
+        //     .map(|(left, right)| Expr::Binary {
+        //         op: Operator::Add,
+        //         left: Box::new(left),
+        //         right: Box::new(right),
+        //     })
+        //     .or(a.clone())
+    });
+
+    let mut ctx = Context::new("a+a");
+    println!("{:?}", expr.parse(0, &mut ctx))
 }
