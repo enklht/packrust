@@ -122,6 +122,15 @@ where
 
         Parser::new(name, raw_parser)
     }
+
+    pub fn opt(self) -> Parser<Option<T>> {
+        let name = format!("optional {}", self.name);
+        let raw_parser = Box::new(move |pos, ctx: &mut Context| match self.parse(pos, ctx) {
+            Ok((pos, val)) => Ok((pos, Some(val))),
+            Err(_) => Ok((pos, None)),
+        });
+        Parser::new(name, raw_parser)
+    }
 }
 
 pub fn satisfy(name: impl Into<String>, f: impl Fn(char) -> bool + 'static) -> Parser<char> {
@@ -225,5 +234,21 @@ mod test {
         assert!(int.parse(0, ctx).is_err());
         let ctx = &mut Context::new("");
         assert!(int.parse(0, ctx).is_err());
+    }
+
+    #[test]
+    fn test_opt() {
+        let digit = satisfy("digit", |c| c.is_ascii_digit());
+        let a = char('a');
+        let p = a.opt().andr(digit);
+
+        let ctx = &mut Context::new("a1c");
+        assert_eq!(p.parse(0, ctx), Ok((2, '1')));
+        let ctx = &mut Context::new("1c");
+        assert_eq!(p.parse(0, ctx), Ok((1, '1')));
+        let ctx = &mut Context::new("abc");
+        assert!(p.parse(0, ctx).is_err());
+        let ctx = &mut Context::new("");
+        assert!(p.parse(0, ctx).is_err());
     }
 }
