@@ -87,5 +87,5 @@ fn main() {
 
     println!("{}", source);
     println!("{}", ast.as_ref().unwrap().1);
-    // println!("{}", ast.unwrap().1.eval());
+    println!("{}", ast.unwrap().1.eval());
 }
