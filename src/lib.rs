@@ -21,13 +21,12 @@ type RawParser<T> = Rc<dyn Fn(Pos, &mut Context) -> ParseResult<T>>;
 
 #[derive(Debug, Clone)]
 enum Entry<T> {
-    Initial,
-    InProgress(ParseResult<T>),
-    Fixed(ParseResult<T>),
+    LeftRecursion,
+    Result(ParseResult<T>),
 }
 
 pub struct Context {
-    cache: HashMap<(ParserId, Pos), Rc<dyn Any>>,
+    cache: HashMap<(ParserId, Pos), Box<dyn Any>>,
     source: String,
     lr_stack: Vec<ParserId>,
 }
@@ -62,85 +61,74 @@ where
     }
 
     pub fn parse(&self, pos: Pos, ctx: &mut Context) -> ParseResult<T> {
-        println!(">>> {} is called at pos {}", self.name, pos);
+        // println!(">>> {} is called at pos {}", self.name, pos);
         let key = (self.id, pos);
         if let Some(cached) = ctx.cache.get(&key) {
             let entry = cached.downcast_ref::<Entry<T>>().cloned().unwrap();
             match entry {
-                Entry::Initial => {
-                    println!("\tleft recursion detected!");
-                    println!("\tname: {}", self.name);
-                    if ctx.lr_stack.last().is_none_or(|id| *id != self.id) {
-                        ctx.lr_stack.push(self.id);
-                    }
+                Entry::LeftRecursion => {
+                    // println!("\tname: {}", self.name);
+                    ctx.lr_stack.push(self.id);
+                    // println!("\t{} has left recursion", self.name);
                     return Err(ParseError {
                         source: ctx.source.clone(),
                         pos,
                         reason: String::from("Initial placeholder"),
                     });
                 }
-                Entry::InProgress(res) => {
-                    return res;
-                }
-                Entry::Fixed(res) => {
+                Entry::Result(res) => {
+                    // println!("returning from {}\n", self.name);
                     return res;
                 }
             }
         }
 
-        // println!("\tcache miss {:?}", key);
-        ctx.cache.insert(key, Rc::new(Entry::<T>::Initial));
+        ctx.cache.insert(key, Box::new(Entry::<T>::LeftRecursion));
 
-        let mut best_pos = pos;
-        let mut best_res = Err(ParseError {
-            source: ctx.source.clone(),
-            pos,
-            reason: String::from("Initial placeholder"),
-        });
-
-        loop {
-            println!("trying {} at {}", self.name, pos);
-            if let Ok((new_pos, val)) = (self.raw_parser)(pos, ctx)
-                && (best_pos < new_pos || (best_pos == new_pos && best_res.is_err()))
-            {
-                println!("updated {}", self.name);
-                best_pos = new_pos;
-                best_res = Ok((new_pos, val.clone()));
-                match ctx.lr_stack.last() {
-                    Some(id) if *id == self.id => {
-                        println!("updating cache to {:?}", val);
-                        ctx.cache
-                            .insert(key, Rc::new(Entry::InProgress(best_res.clone())));
-                    }
-                    None => {
-                        println!("updating cache to {:?}", val);
-                        ctx.cache
-                            .insert(key, Rc::new(Entry::InProgress(best_res.clone())));
-                    }
-                    _ => {}
-                }
-            } else {
-                break;
-            }
-        }
+        let result = (self.raw_parser)(pos, ctx);
 
         match ctx.lr_stack.last() {
             Some(id) if *id == self.id => {
                 ctx.cache
-                    .insert(key, Rc::new(Entry::Fixed(best_res.clone())));
+                    .insert(key, Box::new(Entry::Result(result.clone())));
+
+                let mut best_res @ Ok((mut best_pos, _)) = result else {
+                    ctx.cache
+                        .insert(key, Box::new(Entry::Result(result.clone())));
+                    ctx.lr_stack.pop();
+                    return result;
+                };
+
+                while let Ok((new_pos, val)) = (self.raw_parser)(pos, ctx)
+                    && (best_pos < new_pos || (best_pos == new_pos && best_res.is_err()))
+                {
+                    // println!("updated {}", self.name);
+                    best_pos = new_pos;
+                    best_res = Ok((new_pos, val.clone()));
+                    // println!("updating cache to {:?}", val);
+                    ctx.cache
+                        .insert(key, Box::new(Entry::Result(best_res.clone())));
+                }
+
+                ctx.cache
+                    .insert(key, Box::new(Entry::Result(best_res.clone())));
                 ctx.lr_stack.pop();
-                println!("\tleft recursion resolved!");
-                println!("\tname: {}", self.name);
+                // println!("recursion resolved");
+                best_res
+            }
+            Some(_) => {
+                // TODO:
+                // 今は左再帰が起きていたらすべてのキャッシュを捨てているが、子パーサで左再帰が起きていなかったらキャッシュしていいはず。
+                // 結果の型で判別するかなにかすればいいのかな。
+                // ctxに呼び出し元を記録するでも良さそう（というかそれが多分オリジナルのアプローチ）
+                ctx.cache.remove(&key);
+                result
             }
             None => {
-                ctx.cache
-                    .insert(key, Rc::new(Entry::Fixed(best_res.clone())));
-            }
-            _ => {
-                ctx.cache.remove(&key);
+                ctx.cache.insert(key, Box::new(result.clone()));
+                result
             }
         }
-        best_res
     }
 
     pub fn map<S: Clone + Debug + 'static>(self, f: impl Fn(T) -> S + 'static) -> Parser<S> {

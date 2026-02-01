@@ -3,7 +3,9 @@ use packrat::*;
 #[derive(Debug, Clone)]
 enum Operator {
     Add,
+    // Sub,
     Mul,
+    // Div,
 }
 
 #[derive(Debug, Clone)]
@@ -26,6 +28,20 @@ impl Expr {
                 // Operator::Div => left.eval() / right.eval(),
             },
             Expr::Literal(n) => *n,
+        }
+    }
+}
+
+impl std::fmt::Display for Expr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Expr::Binary { op, left, right } => match op {
+                Operator::Add => write!(f, "({} + {})", left, right),
+                // Operator::Sub => write!(f, "({} - {})", left, right),
+                Operator::Mul => write!(f, "({} * {})", left, right),
+                // Operator::Div => write!(f, "({} / {})", left, right),
+            },
+            Expr::Literal(n) => write!(f, "{}", n),
         }
     }
 }
@@ -65,8 +81,11 @@ fn main() {
             .or(term)
     });
 
-    let mut ctx = Context::new("5*6*7+1*2+3*4");
+    let source = "5*6*7+1*2+3*4";
+    let mut ctx = Context::new(source);
     let ast = expr.parse(0, &mut ctx);
-    println!("{:?}", ast);
-    println!("{}", ast.unwrap().1.eval());
+
+    println!("{}", source);
+    println!("{}", ast.as_ref().unwrap().1);
+    // println!("{}", ast.unwrap().1.eval());
 }
