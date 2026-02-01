@@ -4,8 +4,6 @@ use std::fmt::Debug;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
-
 type ParserId = usize;
 type Pos = usize;
 type CacheKey = (ParserId, Pos);
@@ -81,6 +79,8 @@ where
     T: Clone + Debug + 'static,
 {
     fn new(name: String, raw_parser: RawParser<T>) -> Parser<T> {
+        static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
+
         Parser {
             name,
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
@@ -92,7 +92,10 @@ where
         let key = (self.id, pos);
 
         if let Some(cached) = ctx.cache.get(&key) {
-            let entry = cached.downcast_ref::<Entry<T>>().cloned().unwrap();
+            let entry = cached
+                .downcast_ref::<Entry<T>>()
+                .cloned()
+                .expect("failed to cast Any to Entry<T>");
             match entry {
                 Entry::LeftRecursion => {
                     ctx.lr_stack.push(key);
@@ -122,7 +125,7 @@ where
         {
             let mut best_res @ Ok((mut best_pos, _)) = result else {
                 ctx.lr_stack.pop();
-                assert_eq!(ctx.call_path.pop(), Some(key));
+                debug_assert_eq!(ctx.call_path.pop(), Some(key));
                 return result;
             };
 
@@ -141,11 +144,11 @@ where
                 }
             }
 
-            ctx.lr_stack.pop();
+            debug_assert_eq!(ctx.lr_stack.pop(), Some(key));
             result = best_res
         }
 
-        assert_eq!(ctx.call_path.pop(), Some(key));
+        debug_assert_eq!(ctx.call_path.pop(), Some(key));
         result
     }
 

@@ -5,7 +5,11 @@
 use packrat::*;
 
 fn main() {
-    let parser = lazy("S", |s| {
+    // S -> A '-' A
+    // A -> B 'b' / 'b'
+    // B -> B 'a' / A 'a'
+
+    let parser = {
         let a = lazy("A", |a| {
             let b = {
                 let a = a.clone();
@@ -19,7 +23,7 @@ fn main() {
         });
 
         a.clone().and(char('-')).and(a)
-    })
+    }
     .end()
     .map(|_| "parse success");
 
