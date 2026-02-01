@@ -1,6 +1,8 @@
+use std::any::Any;
+use std::collections::HashMap;
+use std::fmt::Debug;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::{any::Any, collections::HashMap};
 
 static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
 
@@ -19,13 +21,15 @@ type RawParser<T> = Rc<dyn Fn(Pos, &mut Context) -> ParseResult<T>>;
 
 #[derive(Debug, Clone)]
 enum Entry<T> {
-    Seed(ParseResult<T>),
+    Initial,
+    InProgress(ParseResult<T>),
     Fixed(ParseResult<T>),
 }
 
 pub struct Context {
     cache: HashMap<(ParserId, Pos), Rc<dyn Any>>,
     source: String,
+    lr_stack: Vec<ParserId>,
 }
 
 impl Context {
@@ -33,6 +37,7 @@ impl Context {
         Context {
             cache: HashMap::new(),
             source: source.into(),
+            lr_stack: Vec::new(),
         }
     }
 }
@@ -46,7 +51,7 @@ pub struct Parser<T> {
 
 impl<T> Parser<T>
 where
-    T: Clone + 'static,
+    T: Clone + Debug + 'static,
 {
     fn new(name: String, raw_parser: RawParser<T>) -> Parser<T> {
         Parser {
@@ -57,26 +62,34 @@ where
     }
 
     pub fn parse(&self, pos: Pos, ctx: &mut Context) -> ParseResult<T> {
-        println!(
-            ">>> parse called:\n    id: {}\n    name: {}\n    pos: {}",
-            self.id, self.name, pos
-        );
+        println!(">>> {} is called at pos {}", self.name, pos);
         let key = (self.id, pos);
         if let Some(cached) = ctx.cache.get(&key) {
             let entry = cached.downcast_ref::<Entry<T>>().cloned().unwrap();
             match entry {
-                Entry::Seed(res) | Entry::Fixed(res) => {
-                    println!("\tcache hit {:?}", key);
-                    match &res {
-                        Ok((pos, _)) => println!("\t{}", pos),
-                        Err(err) => println!("\t{}, {}", err.pos, err.reason),
+                Entry::Initial => {
+                    println!("\tleft recursion detected!");
+                    println!("\tname: {}", self.name);
+                    if ctx.lr_stack.last().is_none_or(|id| *id != self.id) {
+                        ctx.lr_stack.push(self.id);
                     }
+                    return Err(ParseError {
+                        source: ctx.source.clone(),
+                        pos,
+                        reason: String::from("Initial placeholder"),
+                    });
+                }
+                Entry::InProgress(res) => {
+                    return res;
+                }
+                Entry::Fixed(res) => {
                     return res;
                 }
             }
         }
 
-        println!("\tcache miss {:?}", key);
+        // println!("\tcache miss {:?}", key);
+        ctx.cache.insert(key, Rc::new(Entry::<T>::Initial));
 
         let mut best_pos = pos;
         let mut best_res = Err(ParseError {
@@ -85,27 +98,52 @@ where
             reason: String::from("Initial placeholder"),
         });
 
-        println!("\tcaching initial for {:?}", key);
-        ctx.cache
-            .insert(key, Rc::new(Entry::Seed(best_res.clone())));
-
-        while let Ok((new_pos, val)) = (self.raw_parser)(pos, ctx)
-            && (dbg!(best_pos) < dbg!(new_pos) || (best_pos == new_pos && best_res.is_err()))
-        {
-            best_pos = new_pos;
-            best_res = Ok((new_pos, val));
-            println!("\tcaching seed for {:?}", key);
-            ctx.cache
-                .insert(key, Rc::new(Entry::Seed(best_res.clone())));
+        loop {
+            println!("trying {} at {}", self.name, pos);
+            if let Ok((new_pos, val)) = (self.raw_parser)(pos, ctx)
+                && (best_pos < new_pos || (best_pos == new_pos && best_res.is_err()))
+            {
+                println!("updated {}", self.name);
+                best_pos = new_pos;
+                best_res = Ok((new_pos, val.clone()));
+                match ctx.lr_stack.last() {
+                    Some(id) if *id == self.id => {
+                        println!("updating cache to {:?}", val);
+                        ctx.cache
+                            .insert(key, Rc::new(Entry::InProgress(best_res.clone())));
+                    }
+                    None => {
+                        println!("updating cache to {:?}", val);
+                        ctx.cache
+                            .insert(key, Rc::new(Entry::InProgress(best_res.clone())));
+                    }
+                    _ => {}
+                }
+            } else {
+                break;
+            }
         }
 
-        println!("\tcaching fixed for {:?}", key);
-        ctx.cache
-            .insert(key, Rc::new(Entry::Fixed(best_res.clone())));
+        match ctx.lr_stack.last() {
+            Some(id) if *id == self.id => {
+                ctx.cache
+                    .insert(key, Rc::new(Entry::Fixed(best_res.clone())));
+                ctx.lr_stack.pop();
+                println!("\tleft recursion resolved!");
+                println!("\tname: {}", self.name);
+            }
+            None => {
+                ctx.cache
+                    .insert(key, Rc::new(Entry::Fixed(best_res.clone())));
+            }
+            _ => {
+                ctx.cache.remove(&key);
+            }
+        }
         best_res
     }
 
-    pub fn map<S: Clone + 'static>(self, f: impl Fn(T) -> S + 'static) -> Parser<S> {
+    pub fn map<S: Clone + Debug + 'static>(self, f: impl Fn(T) -> S + 'static) -> Parser<S> {
         let Parser {
             name, raw_parser, ..
         } = self;
@@ -116,7 +154,18 @@ where
         Parser::new(name, raw_parser)
     }
 
-    pub fn try_map<S: Clone + 'static>(self, f: impl Fn(T) -> Option<S> + 'static) -> Parser<S> {
+    pub fn rename(self, name: impl Into<String>) -> Parser<T> {
+        Parser {
+            name: name.into(),
+            id: self.id,
+            raw_parser: self.raw_parser,
+        }
+    }
+
+    pub fn try_map<S: Clone + Debug + 'static>(
+        self,
+        f: impl Fn(T) -> Option<S> + 'static,
+    ) -> Parser<S> {
         let Parser {
             name, raw_parser, ..
         } = self;
@@ -134,8 +183,8 @@ where
         Parser::new(name, raw_parser)
     }
 
-    pub fn and<S: Clone + 'static>(self, right: Parser<S>) -> Parser<(T, S)> {
-        let name = format!("({} and {})", self.name, right.name);
+    pub fn and<S: Clone + Debug + 'static>(self, right: Parser<S>) -> Parser<(T, S)> {
+        let name = format!("({}{})", self.name, right.name);
         let raw_parser = Rc::new(move |pos, ctx: &mut Context| {
             let (pos, left_result) = self.parse(pos, ctx)?;
             let (pos, right_result) = right.parse(pos, ctx)?;
@@ -144,16 +193,16 @@ where
         Parser::new(name, raw_parser)
     }
 
-    pub fn andl<S: Clone + 'static>(self, right: Parser<S>) -> Parser<T> {
+    pub fn andl<S: Clone + Debug + 'static>(self, right: Parser<S>) -> Parser<T> {
         self.and(right).map(|(left, _)| left)
     }
 
-    pub fn andr<S: Clone + 'static>(self, right: Parser<S>) -> Parser<S> {
+    pub fn andr<S: Clone + Debug + 'static>(self, right: Parser<S>) -> Parser<S> {
         self.and(right).map(|(_, right)| right)
     }
 
     pub fn many(self) -> Parser<Vec<T>> {
-        let name = format!("(many {})", self.name);
+        let name = format!("({}*)", self.name);
         let raw_parser = Rc::new(move |pos, ctx: &mut Context| {
             let mut acc = Vec::new();
             let mut pos = pos;
@@ -170,7 +219,7 @@ where
     }
 
     pub fn opt(self) -> Parser<Option<T>> {
-        let name = format!("(optional {})", self.name);
+        let name = format!("({}?)", self.name);
         let raw_parser = Rc::new(move |pos, ctx: &mut Context| match self.parse(pos, ctx) {
             Ok((pos, val)) => Ok((pos, Some(val))),
             Err(_) => Ok((pos, None)),
@@ -179,7 +228,7 @@ where
     }
 
     pub fn or(self, right: Parser<T>) -> Parser<T> {
-        let name = format!("({} or {})", self.name, right.name);
+        let name = format!("({}/{})", self.name, right.name);
         let raw_parser = Rc::new(move |pos, ctx: &mut Context| {
             let e1 = match self.parse(pos, ctx) {
                 ok @ Ok(_) => return ok,
@@ -223,14 +272,14 @@ pub fn satisfy(name: impl Into<String>, f: impl Fn(char) -> bool + 'static) -> P
 }
 
 pub fn any_char() -> Parser<char> {
-    satisfy("any char", |_| true)
+    satisfy("(any char)", |_| true)
 }
 
 pub fn char(c: char) -> Parser<char> {
-    satisfy(format!("(char '{}')", c), move |x| x == c)
+    satisfy(format!("'{}'", c), move |x| x == c)
 }
 
-pub fn lazy<T: Clone + 'static>(
+pub fn lazy<T: Clone + Debug + 'static>(
     name: impl Into<String>,
     get_parser: impl Fn(Parser<T>) -> Parser<T> + 'static,
 ) -> Parser<T> {
