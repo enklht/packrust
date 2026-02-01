@@ -7,7 +7,7 @@ A packrat parser combinator library in Rust that handles direct and indirect lef
 - 🧠 Memoized parsing
 - 🔄 Correctly handles left recursion (both direct and indirect)
 - 🔧 Combinator-based API: `and`, `or`, `map`, `many`, `opt`, `lazy`, and more
-- 📦 Zero dependencies
+- 📦 Small dependencies (only `rustc_hash` for fast hashmap)
 
 ## Example
 
@@ -17,14 +17,13 @@ use packrust::*;
 let expr: Parser<i32> = lazy("expr", |expr| {
     let digit = satisfy("digit", |c| c.is_ascii_digit());
     let int = digit.many().try_map(|c| c.iter().collect::<String>().parse().ok());
-    
+
     expr.andl(char('+')).and(int)
         .map(|(a, b)| a + b)
         .or(int)
 });
 
-let mut ctx = Context::new("1+2+3");
-let result = expr.parse(0, &mut ctx).unwrap().1;
+let result = expr.parse("1+2+3");
 ```
 
 ## Educational Purpose

@@ -82,10 +82,9 @@ fn main() {
     });
 
     let source = "5*6*7+1*2+3*4";
-    let mut ctx = Context::new(source);
-    let ast = expr.parse(0, &mut ctx);
+    let ast = expr.run(source);
 
-    println!("{}", source);
-    println!("{}", ast.as_ref().unwrap().1);
-    println!("{}", ast.unwrap().1.eval());
+    println!("source: {}", source);
+    println!("parsed: {}", ast.as_ref().unwrap());
+    println!("\t= {}", ast.unwrap().eval());
 }

@@ -27,7 +27,6 @@ fn main() {
     .end()
     .map(|_| "parse success");
 
-    let mut ctx = Context::new("baab-baab");
-    let res = parser.parse(0, &mut ctx);
+    let res = parser.run("baab-baab");
     println!("{:?}", res);
 }
