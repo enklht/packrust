@@ -19,7 +19,10 @@ fn main() {
         });
 
         a.clone().and(char('-')).and(a)
-    });
+    })
+    .end()
+    .map(|_| "parse success");
+
     let mut ctx = Context::new("baab-baab");
     let res = parser.parse(0, &mut ctx);
     println!("{:?}", res);

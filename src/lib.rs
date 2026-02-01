@@ -8,6 +8,7 @@ static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
 
 type ParserId = usize;
 type Pos = usize;
+type CacheKey = (ParserId, Pos);
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParseError {
@@ -26,11 +27,11 @@ enum Entry<T> {
 }
 
 pub struct Context {
-    cache: HashMap<(ParserId, Pos), Box<dyn Any>>,
+    cache: HashMap<CacheKey, Box<dyn Any>>,
     source: String,
-    lr_stack: Vec<(ParserId, Pos)>,
-    call_stack: Vec<(ParserId, Pos)>,
-    keys_to_clear: HashMap<(ParserId, Pos), Vec<(ParserId, Pos)>>,
+    lr_stack: Vec<CacheKey>,
+    call_path: Vec<CacheKey>,
+    pending_evictions: HashMap<CacheKey, Vec<CacheKey>>,
 }
 
 impl Context {
@@ -39,29 +40,31 @@ impl Context {
             cache: HashMap::new(),
             source: source.into(),
             lr_stack: Vec::new(),
-            call_stack: Vec::new(),
-            keys_to_clear: HashMap::new(),
+            call_path: Vec::new(),
+            pending_evictions: HashMap::new(),
         }
     }
 
-    fn schedule_cache_eviction(&mut self, key: (ParserId, Pos)) {
-        let scheduled_keys = self.keys_to_clear.entry(key).or_default();
-        for stacked_key in self.call_stack.iter().rev() {
-            if *stacked_key == key {
+    fn schedule_cache_eviction(&mut self, key: CacheKey) {
+        let dependents = self.pending_evictions.entry(key).or_default();
+
+        for &ancestor in self.call_path.iter().rev() {
+            if ancestor == key {
                 break;
             } else {
-                scheduled_keys.push(*stacked_key);
+                dependents.push(ancestor);
             }
         }
     }
 
-    fn execute_cache_eviction(&mut self, key: (ParserId, Pos)) {
-        let Some(keys_to_clear) = self.keys_to_clear.get(&key).cloned() else {
+    fn execute_cache_eviction(&mut self, key: CacheKey) {
+        let Some(dependents) = self.pending_evictions.get(&key).cloned() else {
             return;
         };
-        for key_to_clear in keys_to_clear {
-            self.execute_cache_eviction(key_to_clear);
-            self.cache.remove(&key_to_clear);
+
+        for dependent in dependents {
+            self.execute_cache_eviction(dependent);
+            self.cache.remove(&dependent);
         }
     }
 }
@@ -86,36 +89,29 @@ where
     }
 
     pub fn parse(&self, pos: Pos, ctx: &mut Context) -> ParseResult<T> {
-        println!(
-            ">>> {} [id: {}] is called at pos {}",
-            self.name, self.id, pos
-        );
         let key = (self.id, pos);
 
         if let Some(cached) = ctx.cache.get(&key) {
             let entry = cached.downcast_ref::<Entry<T>>().cloned().unwrap();
             match entry {
                 Entry::LeftRecursion => {
-                    // println!("\tleft recursion detected, name: {}", self.name);
                     ctx.lr_stack.push(key);
                     ctx.schedule_cache_eviction(key);
 
-                    // println!("\t{} has left recursion", self.name);
                     return Err(ParseError {
                         source: ctx.source.clone(),
                         pos,
-                        reason: String::from("Initial placeholder"),
+                        reason: String::from("left recursion not resolved"),
                     });
                 }
                 Entry::Result(res) => {
-                    // println!("cache hit: {}\n", self.name);
                     return res;
                 }
             }
         }
 
         ctx.cache.insert(key, Box::new(Entry::<T>::LeftRecursion));
-        ctx.call_stack.push(key);
+        ctx.call_path.push(key);
 
         let mut result = (self.raw_parser)(pos, ctx);
         ctx.cache
@@ -126,21 +122,18 @@ where
         {
             let mut best_res @ Ok((mut best_pos, _)) = result else {
                 ctx.lr_stack.pop();
-                let popped = ctx.call_stack.pop();
-                assert_eq!(popped, Some(key));
+                assert_eq!(ctx.call_path.pop(), Some(key));
                 return result;
             };
 
             loop {
                 ctx.execute_cache_eviction(key);
 
-                if let Ok((new_pos, val)) = (self.raw_parser)(pos, ctx)
+                if let new_res @ Ok((new_pos, _)) = (self.raw_parser)(pos, ctx)
                     && (best_pos < new_pos || (best_pos == new_pos && best_res.is_err()))
                 {
-                    // println!("updated {}", self.name);
                     best_pos = new_pos;
-                    best_res = Ok((new_pos, val.clone()));
-                    // println!("updating cache to {:?}", val);
+                    best_res = new_res.clone();
                     ctx.cache
                         .insert(key, Box::new(Entry::Result(best_res.clone())));
                 } else {
@@ -149,13 +142,10 @@ where
             }
 
             ctx.lr_stack.pop();
-            // println!("recursion resolved");
             result = best_res
         }
 
-        let popped = ctx.call_stack.pop();
-        assert_eq!(popped, Some(key));
-
+        assert_eq!(ctx.call_path.pop(), Some(key));
         result
     }
 
@@ -257,6 +247,23 @@ where
             };
 
             if e1.pos >= e2.pos { Err(e1) } else { Err(e2) }
+        });
+
+        Parser::new(name, raw_parser)
+    }
+
+    pub fn end(self) -> Parser<T> {
+        let name = String::from("end");
+        let raw_parser = Rc::new(move |pos, ctx: &mut Context| {
+            let (pos, val) = self.parse(pos, ctx)?;
+            match ctx.source.chars().nth(pos) {
+                Some(c) => Err(ParseError {
+                    source: ctx.source.clone(),
+                    pos,
+                    reason: format!("expected EOF found {}", c),
+                }),
+                None => Ok((pos, val)),
+            }
         });
 
         Parser::new(name, raw_parser)
