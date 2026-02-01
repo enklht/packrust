@@ -5,7 +5,7 @@ use crate::CacheKey;
 
 pub struct Context {
     pub cache: FxHashMap<CacheKey, Box<dyn Any>>,
-    pub source: String,
+    pub source: Vec<char>,
     pub lr_stack: Vec<CacheKey>,
     pub call_path: Vec<CacheKey>,
     pub pending_evictions: FxHashMap<CacheKey, Vec<CacheKey>>,
@@ -15,7 +15,7 @@ impl Context {
     pub fn new(source: impl Into<String>) -> Self {
         Context {
             cache: FxHashMap::default(),
-            source: source.into(),
+            source: source.into().chars().collect(),
             lr_stack: Vec::new(),
             call_path: Vec::new(),
             pending_evictions: FxHashMap::default(),

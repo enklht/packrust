@@ -38,7 +38,7 @@ pub struct Parser<T> {
 
 impl<T> Parser<T>
 where
-    T: Clone + Debug + 'static,
+    T: Clone + 'static,
 {
     fn new(name: String, raw_parser: RawParser<T>) -> Parser<T> {
         static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
@@ -64,7 +64,7 @@ where
                     ctx.schedule_cache_eviction(key);
 
                     return Err(ParseError {
-                        source: ctx.source.clone(),
+                        source: ctx.source.iter().collect(),
                         pos,
                         reason: String::from("left recursion not resolved"),
                     });

@@ -1,4 +1,3 @@
-use std::fmt::Debug;
 use std::rc::Rc;
 
 use crate::Context;
@@ -7,9 +6,9 @@ use crate::Parser;
 
 impl<T> Parser<T>
 where
-    T: Clone + Debug + 'static,
+    T: Clone + 'static,
 {
-    pub fn map<S: Clone + Debug + 'static>(self, f: impl Fn(T) -> S + 'static) -> Parser<S> {
+    pub fn map<S: Clone + 'static>(self, f: impl Fn(T) -> S + 'static) -> Parser<S> {
         let Parser {
             name, raw_parser, ..
         } = self;
@@ -28,10 +27,7 @@ where
         }
     }
 
-    pub fn try_map<S: Clone + Debug + 'static>(
-        self,
-        f: impl Fn(T) -> Option<S> + 'static,
-    ) -> Parser<S> {
+    pub fn try_map<S: Clone + 'static>(self, f: impl Fn(T) -> Option<S> + 'static) -> Parser<S> {
         let Parser {
             name, raw_parser, ..
         } = self;
@@ -39,7 +35,7 @@ where
             let (pos, val) = raw_parser(pos, ctx)?;
             let Some(val) = f(val) else {
                 return Err(ParseError {
-                    source: ctx.source.clone(),
+                    source: ctx.source.iter().collect(),
                     pos,
                     reason: String::from("try map failed: got None"),
                 });
@@ -49,7 +45,7 @@ where
         Parser::new(name, raw_parser)
     }
 
-    pub fn and<S: Clone + Debug + 'static>(self, right: Parser<S>) -> Parser<(T, S)> {
+    pub fn and<S: Clone + 'static>(self, right: Parser<S>) -> Parser<(T, S)> {
         let name = format!("({}{})", self.name, right.name);
         let raw_parser = Rc::new(move |pos, ctx: &mut Context| {
             let (pos, left_result) = self.parse(pos, ctx)?;
@@ -59,11 +55,11 @@ where
         Parser::new(name, raw_parser)
     }
 
-    pub fn andl<S: Clone + Debug + 'static>(self, right: Parser<S>) -> Parser<T> {
+    pub fn andl<S: Clone + 'static>(self, right: Parser<S>) -> Parser<T> {
         self.and(right).map(|(left, _)| left)
     }
 
-    pub fn andr<S: Clone + Debug + 'static>(self, right: Parser<S>) -> Parser<S> {
+    pub fn andr<S: Clone + 'static>(self, right: Parser<S>) -> Parser<S> {
         self.and(right).map(|(_, right)| right)
     }
 
@@ -116,9 +112,9 @@ where
         let name = String::from("end");
         let raw_parser = Rc::new(move |pos, ctx: &mut Context| {
             let (pos, val) = self.parse(pos, ctx)?;
-            match ctx.source.chars().nth(pos) {
+            match ctx.source.get(pos) {
                 Some(c) => Err(ParseError {
-                    source: ctx.source.clone(),
+                    source: ctx.source.iter().collect(),
                     pos,
                     reason: format!("expected EOF found {}", c),
                 }),
@@ -134,21 +130,19 @@ pub fn satisfy(name: impl Into<String>, f: impl Fn(char) -> bool + 'static) -> P
     let name = name.into();
     let raw_parser = {
         let name = name.clone();
-        Rc::new(
-            move |pos, ctx: &mut Context| match ctx.source.chars().nth(pos) {
-                Some(c) if f(c) => Ok((pos + 1, c)),
-                Some(c) => Err(ParseError {
-                    source: ctx.source.to_string(),
-                    pos,
-                    reason: format!("expected {} got {}", name, c),
-                }),
-                None => Err(ParseError {
-                    source: ctx.source.to_string(),
-                    pos,
-                    reason: format!("expected {} got EOF", name),
-                }),
-            },
-        )
+        Rc::new(move |pos, ctx: &mut Context| match ctx.source.get(pos) {
+            Some(&c) if f(c) => Ok((pos + 1, c)),
+            Some(c) => Err(ParseError {
+                source: ctx.source.iter().collect(),
+                pos,
+                reason: format!("expected {} got {}", name, c),
+            }),
+            None => Err(ParseError {
+                source: ctx.source.iter().collect(),
+                pos,
+                reason: format!("expected {} got EOF", name),
+            }),
+        })
     };
 
     Parser::new(name, raw_parser)
@@ -162,7 +156,32 @@ pub fn char(c: char) -> Parser<char> {
     satisfy(format!("'{}'", c), move |x| x == c)
 }
 
-pub fn lazy<T: Clone + Debug + 'static>(
+pub fn keyword(keyword: impl Into<String>) -> Parser<String> {
+    let name = keyword.into();
+    let keyword = name.clone().chars().collect::<Vec<char>>();
+    let raw_parser = {
+        let name = name.clone();
+        Rc::new(move |pos, ctx: &mut Context| {
+            if ctx
+                .source
+                .get(pos..)
+                .is_some_and(|s| s.starts_with(&keyword))
+            {
+                Ok((pos + keyword.len(), name.clone()))
+            } else {
+                Err(ParseError {
+                    source: ctx.source.iter().collect(),
+                    pos,
+                    reason: String::from(""),
+                })
+            }
+        })
+    };
+
+    Parser::new(name, raw_parser)
+}
+
+pub fn lazy<T: Clone + 'static>(
     name: impl Into<String>,
     get_parser: impl Fn(Parser<T>) -> Parser<T> + 'static,
 ) -> Parser<T> {
@@ -289,5 +308,19 @@ mod test {
         assert!(p.parse(0, ctx).is_err());
         let ctx = &mut Context::new("");
         assert!(p.parse(0, ctx).is_err());
+    }
+
+    #[test]
+    fn test_keyword() {
+        let kw_int = keyword("int");
+
+        let ctx = &mut Context::new("int");
+        assert_eq!(kw_int.parse(0, ctx), Ok((3, String::from("int"))));
+        let ctx = &mut Context::new("int 10");
+        assert_eq!(kw_int.parse(0, ctx), Ok((3, String::from("int"))));
+        let ctx = &mut Context::new("bcd");
+        assert!(kw_int.parse(0, ctx).is_err());
+        let ctx = &mut Context::new("");
+        assert!(kw_int.parse(0, ctx).is_err());
     }
 }

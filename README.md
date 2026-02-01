@@ -23,7 +23,7 @@ let expr: Parser<i32> = lazy("expr", |expr| {
         .or(int)
 });
 
-let result = expr.parse("1+2+3");
+let result = expr.run("1+2+3");
 ```
 
 ## Educational Purpose
