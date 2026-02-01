@@ -2,7 +2,7 @@
 // source: Packrat Parsers Can Support Multiple Left-recursive Calls at the Same Position
 // doi: 10.2197/ipsjjip.29.174
 
-use packrat::*;
+use packrust::*;
 
 fn main() {
     // S -> A '-' A

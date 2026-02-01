@@ -1,4 +1,4 @@
-use packrat::*;
+use packrust::*;
 
 #[derive(Debug, Clone)]
 enum Operator {

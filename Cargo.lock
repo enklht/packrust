@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "packrat"
+name = "packrust"
 version = "0.1.0"
