@@ -1,11 +1,3 @@
-// TODO:
-// 今は左再帰が起きていたらすべてのキャッシュを捨てているが、子パーサで左再帰が起きていなかったらキャッシュしていいはず。
-// 結果の型で判別するかなにかすればいいのかな。
-// ctxに呼び出し元を記録するでも良さそう（というかそれが多分オリジナルのアプローチ）
-// 概略：すべての呼び出しをスタックに記録、返すときにポップ
-// 左再帰が見つかったら同じIDが出るまでスタックを辿って道を記録
-// 元の位置に戻ったら記録されたIDがのキャッシュを消去する。
-
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -36,7 +28,9 @@ enum Entry<T> {
 pub struct Context {
     cache: HashMap<(ParserId, Pos), Box<dyn Any>>,
     source: String,
-    lr_stack: Vec<ParserId>,
+    lr_stack: Vec<(ParserId, Pos)>,
+    call_stack: Vec<(ParserId, Pos)>,
+    keys_to_clear: HashMap<(ParserId, Pos), Vec<(ParserId, Pos)>>,
 }
 
 impl Context {
@@ -45,6 +39,29 @@ impl Context {
             cache: HashMap::new(),
             source: source.into(),
             lr_stack: Vec::new(),
+            call_stack: Vec::new(),
+            keys_to_clear: HashMap::new(),
+        }
+    }
+
+    fn schedule_cache_eviction(&mut self, key: (ParserId, Pos)) {
+        let scheduled_keys = self.keys_to_clear.entry(key).or_default();
+        for stacked_key in self.call_stack.iter().rev() {
+            if *stacked_key == key {
+                break;
+            } else {
+                scheduled_keys.push(*stacked_key);
+            }
+        }
+    }
+
+    fn execute_cache_eviction(&mut self, key: (ParserId, Pos)) {
+        let Some(keys_to_clear) = self.keys_to_clear.get(&key).cloned() else {
+            return;
+        };
+        for key_to_clear in keys_to_clear {
+            self.execute_cache_eviction(key_to_clear);
+            self.cache.remove(&key_to_clear);
         }
     }
 }
@@ -69,14 +86,20 @@ where
     }
 
     pub fn parse(&self, pos: Pos, ctx: &mut Context) -> ParseResult<T> {
-        // println!(">>> {} is called at pos {}", self.name, pos);
+        println!(
+            ">>> {} [id: {}] is called at pos {}",
+            self.name, self.id, pos
+        );
         let key = (self.id, pos);
+
         if let Some(cached) = ctx.cache.get(&key) {
             let entry = cached.downcast_ref::<Entry<T>>().cloned().unwrap();
             match entry {
                 Entry::LeftRecursion => {
-                    // println!("\tname: {}", self.name);
-                    ctx.lr_stack.push(self.id);
+                    // println!("\tleft recursion detected, name: {}", self.name);
+                    ctx.lr_stack.push(key);
+                    ctx.schedule_cache_eviction(key);
+
                     // println!("\t{} has left recursion", self.name);
                     return Err(ParseError {
                         source: ctx.source.clone(),
@@ -85,29 +108,33 @@ where
                     });
                 }
                 Entry::Result(res) => {
-                    // println!("returning from {}\n", self.name);
+                    // println!("cache hit: {}\n", self.name);
                     return res;
                 }
             }
         }
 
         ctx.cache.insert(key, Box::new(Entry::<T>::LeftRecursion));
+        ctx.call_stack.push(key);
 
-        let result = (self.raw_parser)(pos, ctx);
+        let mut result = (self.raw_parser)(pos, ctx);
+        ctx.cache
+            .insert(key, Box::new(Entry::Result(result.clone())));
 
-        match ctx.lr_stack.last() {
-            Some(id) if *id == self.id => {
-                ctx.cache
-                    .insert(key, Box::new(Entry::Result(result.clone())));
+        if let Some(nearest_lr_key) = ctx.lr_stack.last()
+            && *nearest_lr_key == key
+        {
+            let mut best_res @ Ok((mut best_pos, _)) = result else {
+                ctx.lr_stack.pop();
+                let popped = ctx.call_stack.pop();
+                assert_eq!(popped, Some(key));
+                return result;
+            };
 
-                let mut best_res @ Ok((mut best_pos, _)) = result else {
-                    ctx.cache
-                        .insert(key, Box::new(Entry::Result(result.clone())));
-                    ctx.lr_stack.pop();
-                    return result;
-                };
+            loop {
+                ctx.execute_cache_eviction(key);
 
-                while let Ok((new_pos, val)) = (self.raw_parser)(pos, ctx)
+                if let Ok((new_pos, val)) = (self.raw_parser)(pos, ctx)
                     && (best_pos < new_pos || (best_pos == new_pos && best_res.is_err()))
                 {
                     // println!("updated {}", self.name);
@@ -116,21 +143,20 @@ where
                     // println!("updating cache to {:?}", val);
                     ctx.cache
                         .insert(key, Box::new(Entry::Result(best_res.clone())));
+                } else {
+                    break;
                 }
+            }
 
-                ctx.lr_stack.pop();
-                // println!("recursion resolved");
-                best_res
-            }
-            Some(_) => {
-                ctx.cache.remove(&key);
-                result
-            }
-            None => {
-                ctx.cache.insert(key, Box::new(result.clone()));
-                result
-            }
+            ctx.lr_stack.pop();
+            // println!("recursion resolved");
+            result = best_res
         }
+
+        let popped = ctx.call_stack.pop();
+        assert_eq!(popped, Some(key));
+
+        result
     }
 
     pub fn map<S: Clone + Debug + 'static>(self, f: impl Fn(T) -> S + 'static) -> Parser<S> {
