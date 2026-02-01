@@ -1,3 +1,11 @@
+// TODO:
+// 今は左再帰が起きていたらすべてのキャッシュを捨てているが、子パーサで左再帰が起きていなかったらキャッシュしていいはず。
+// 結果の型で判別するかなにかすればいいのかな。
+// ctxに呼び出し元を記録するでも良さそう（というかそれが多分オリジナルのアプローチ）
+// 概略：すべての呼び出しをスタックに記録、返すときにポップ
+// 左再帰が見つかったら同じIDが出るまでスタックを辿って道を記録
+// 元の位置に戻ったら記録されたIDがのキャッシュを消去する。
+
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -110,17 +118,11 @@ where
                         .insert(key, Box::new(Entry::Result(best_res.clone())));
                 }
 
-                ctx.cache
-                    .insert(key, Box::new(Entry::Result(best_res.clone())));
                 ctx.lr_stack.pop();
                 // println!("recursion resolved");
                 best_res
             }
             Some(_) => {
-                // TODO:
-                // 今は左再帰が起きていたらすべてのキャッシュを捨てているが、子パーサで左再帰が起きていなかったらキャッシュしていいはず。
-                // 結果の型で判別するかなにかすればいいのかな。
-                // ctxに呼び出し元を記録するでも良さそう（というかそれが多分オリジナルのアプローチ）
                 ctx.cache.remove(&key);
                 result
             }
