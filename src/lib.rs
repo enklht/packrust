@@ -1,10 +1,9 @@
 mod combinators;
 mod context;
 
-use std::fmt::Debug;
+use log::{debug, info, trace};
 use std::rc::Rc;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub use crate::combinators::*;
 pub use crate::context::Context;
@@ -20,11 +19,19 @@ pub struct ParseError {
     reason: String,
 }
 
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "{}", self.source)?;
+        writeln!(f, "{}^", " ".repeat(self.pos))?;
+        writeln!(f, "{}", self.reason)
+    }
+}
+
 type ParseResult<T> = Result<(Pos, T), ParseError>;
 type RawParser<T> = Rc<dyn Fn(Pos, &mut Context) -> ParseResult<T>>;
 
 #[derive(Debug, Clone)]
-enum Entry<T> {
+enum CacheEntry<T> {
     LeftRecursion,
     Result(ParseResult<T>),
 }
@@ -51,43 +58,51 @@ where
     }
 
     pub fn parse(&self, pos: Pos, ctx: &mut Context) -> ParseResult<T> {
+        trace!("called {} at {}", self.name, pos);
         let key = (self.id, pos);
 
         if let Some(cached) = ctx.cache.get(&key) {
             let entry = cached
-                .downcast_ref::<Entry<T>>()
+                .downcast_ref::<CacheEntry<T>>()
                 .cloned()
                 .expect("failed to cast Any to Entry<T>");
             match entry {
-                Entry::LeftRecursion => {
+                CacheEntry::LeftRecursion => {
+                    info!("left recursion detected: {} at {}", self.name, pos);
                     ctx.lr_stack.push(key);
                     ctx.schedule_cache_eviction(key);
 
                     return Err(ParseError {
                         source: ctx.source.iter().collect(),
                         pos,
-                        reason: String::from("left recursion not resolved"),
+                        reason: String::from("failed to resolve left recursion"),
                     });
                 }
-                Entry::Result(res) => {
+                CacheEntry::Result(res) => {
                     return res;
                 }
             }
         }
 
-        ctx.cache.insert(key, Box::new(Entry::<T>::LeftRecursion));
+        ctx.cache
+            .insert(key, Box::new(CacheEntry::<T>::LeftRecursion));
         ctx.call_path.push(key);
 
         let mut result = (self.raw_parser)(pos, ctx);
+
+        debug!("cache insertion: {} at {}", self.name, pos);
         ctx.cache
-            .insert(key, Box::new(Entry::Result(result.clone())));
+            .insert(key, Box::new(CacheEntry::Result(result.clone())));
 
         if let Some(nearest_lr_key) = ctx.lr_stack.last()
             && *nearest_lr_key == key
         {
+            info!("start left recursion expansion: {} at {}", self.name, pos);
             let mut best_res @ Ok((mut best_pos, _)) = result else {
-                ctx.lr_stack.pop();
-                debug_assert_eq!(ctx.call_path.pop(), Some(key));
+                let popped = ctx.lr_stack.pop();
+                debug_assert_eq!(popped, Some(key));
+                let popped = ctx.call_path.pop();
+                debug_assert_eq!(popped, Some(key));
                 return result;
             };
 
@@ -99,18 +114,24 @@ where
                 {
                     best_pos = new_pos;
                     best_res = new_res.clone();
+                    info!("cache update: {} at {}", self.name, pos);
                     ctx.cache
-                        .insert(key, Box::new(Entry::Result(best_res.clone())));
+                        .insert(key, Box::new(CacheEntry::Result(best_res.clone())));
                 } else {
                     break;
                 }
             }
 
-            debug_assert_eq!(ctx.lr_stack.pop(), Some(key));
+            info!("cache fix: {} at {}", self.name, pos);
+
+            ctx.clear_cache_eviction_schedule(&key);
+            let popped = ctx.lr_stack.pop();
+            debug_assert_eq!(popped, Some(key));
             result = best_res
         }
 
-        debug_assert_eq!(ctx.call_path.pop(), Some(key));
+        let popped = ctx.call_path.pop();
+        debug_assert_eq!(popped, Some(key));
         result
     }
 

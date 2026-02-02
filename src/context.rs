@@ -44,4 +44,14 @@ impl Context {
             self.cache.remove(&dependent);
         }
     }
+
+    pub(crate) fn clear_cache_eviction_schedule(&mut self, key: &CacheKey) {
+        let Some(dependents) = self.pending_evictions.remove(key) else {
+            return;
+        };
+
+        for dependent in dependents {
+            self.clear_cache_eviction_schedule(&dependent)
+        }
+    }
 }

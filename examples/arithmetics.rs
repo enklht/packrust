@@ -1,3 +1,5 @@
+extern crate env_logger;
+extern crate log;
 use packrust::*;
 
 #[derive(Debug, Clone)]
@@ -47,6 +49,8 @@ impl std::fmt::Display for Expr {
 }
 
 fn main() {
+    env_logger::init();
+
     let expr: Parser<Expr> = lazy("expr", move |expr| {
         let term: Parser<Expr> = {
             let expr = expr.clone();
@@ -81,10 +85,15 @@ fn main() {
             .or(term)
     });
 
-    let source = "5*6*7+1*2+3*4";
-    let ast = expr.run(source);
+    let source = "1*2+(3*4)+(5*(6+7))";
+    let res = expr.run(source);
 
     println!("source: {}", source);
-    println!("parsed: {}", ast.as_ref().unwrap());
-    println!("\t= {}", ast.unwrap().eval());
+    match res {
+        Ok(ast) => {
+            println!("parsed: {}", ast);
+            println!("\t = {}", ast.eval());
+        }
+        Err(e) => eprintln!("{}", e),
+    }
 }

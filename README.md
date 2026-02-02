@@ -1,13 +1,15 @@
 # 🐀 packrust
 
-A packrat parser combinator library in Rust that handles direct and indirect left recursion correctly.
+A packrat parser combinator in Rust handles direct and indirect left recursion correctly.
 
 ## Features
 
 - 🧠 Memoized parsing
 - 🔄 Correctly handles left recursion (both direct and indirect)
 - 🔧 Combinator-based API: `and`, `or`, `map`, `many`, `opt`, `lazy`, and more
-- 📦 Small dependencies (only `rustc_hash` for fast hashmap)
+- 📦 Small dependencies
+  - `rustc_hash` for faster hashmap
+  - `log`, `env_logger` for logging
 
 ## Example
 
@@ -34,7 +36,9 @@ This is a learning project exploring packrat parsing with left recursion support
 
 Heavily inspired by:
 
-- <https://zenn.dev/fj68/articles/b789c67f6b6e38>
+- <https://zenn.dev/fj68/articles/b789c67f6b6e38> (Japanese)
+
+Other references
 
 - Warth et al., Packrat parsers can support left recursion (PEPM 2008)
 - Umeda & Maeda, Packrat Parsers Can Support Multiple Left-recursive Calls (2021)
