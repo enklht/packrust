@@ -124,7 +124,7 @@ where
 
             info!("cache fix: {} at {}", self.name, pos);
 
-            ctx.clear_cache_eviction_schedule(&key);
+            ctx.clear_cache_eviction_schedule(key);
             let popped = ctx.lr_stack.pop();
             debug_assert_eq!(popped, Some(key));
             result = best_res

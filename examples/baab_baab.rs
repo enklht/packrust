@@ -14,15 +14,13 @@ fn main() {
             let b = {
                 let a = a.clone();
                 lazy("B", move |b| {
-                    b.and(char('a'))
-                        .map(|_| ())
-                        .or(a.clone().and(char('a')).map(|_| ()))
+                    b.andr(char('a')).or(a.clone().andr(char('a')))
                 })
             };
-            b.andr(char('b')).or(char('b')).map(|_| ())
+            b.andr(char('b')).or(char('b'))
         });
 
-        a.clone().and(char('-')).and(a)
+        a.clone().andr(char('-')).andr(a)
     }
     .end()
     .map(|_| "parse success");

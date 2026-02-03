@@ -64,6 +64,7 @@ fn main() {
                 let factor = int
                     .or(char('(').andr(expr.clone()).andl(char(')')))
                     .rename("factor");
+
                 term.andl(char('*'))
                     .and(factor.clone())
                     .map(|(left, right)| Expr::Binary {

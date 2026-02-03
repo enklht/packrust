@@ -8,17 +8,6 @@ impl<T> Parser<T>
 where
     T: Clone + 'static,
 {
-    pub fn map<S: Clone + 'static>(self, f: impl Fn(T) -> S + 'static) -> Parser<S> {
-        let Parser {
-            name, raw_parser, ..
-        } = self;
-        let raw_parser = Rc::new(move |pos, ctx: &mut Context| {
-            let (pos, val) = raw_parser(pos, ctx)?;
-            Ok((pos, f(val)))
-        });
-        Parser::new(name, raw_parser)
-    }
-
     pub fn rename(self, name: impl Into<String>) -> Parser<T> {
         Parser {
             name: name.into(),
@@ -27,12 +16,19 @@ where
         }
     }
 
-    pub fn try_map<S: Clone + 'static>(self, f: impl Fn(T) -> Option<S> + 'static) -> Parser<S> {
-        let Parser {
-            name, raw_parser, ..
-        } = self;
+    pub fn map<S: Clone + 'static>(self, f: impl Fn(T) -> S + 'static) -> Parser<S> {
+        let name = self.name;
         let raw_parser = Rc::new(move |pos, ctx: &mut Context| {
-            let (pos, val) = raw_parser(pos, ctx)?;
+            let (pos, val) = (self.raw_parser)(pos, ctx)?;
+            Ok((pos, f(val)))
+        });
+        Parser::new(name, raw_parser)
+    }
+
+    pub fn try_map<S: Clone + 'static>(self, f: impl Fn(T) -> Option<S> + 'static) -> Parser<S> {
+        let name = self.name;
+        let raw_parser = Rc::new(move |pos, ctx: &mut Context| {
+            let (pos, val) = (self.raw_parser)(pos, ctx)?;
             let Some(val) = f(val) else {
                 return Err(ParseError {
                     source: ctx.source.iter().collect(),
