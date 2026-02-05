@@ -5,11 +5,12 @@
 use packrust::*;
 
 fn main() {
+    env_logger::init();
+
     // S -> A '-' A
     // A -> B 'b' / 'b'
     // B -> B 'a' / A 'a'
-
-    let parser = {
+    let s = {
         let a = lazy("A", |a| {
             let b = {
                 let a = a.clone();
@@ -25,6 +26,6 @@ fn main() {
     .end()
     .map(|_| "parse success");
 
-    let res = parser.run("baab-baab");
+    let res = s.run("baab-baab");
     println!("{:?}", res);
 }

@@ -7,8 +7,8 @@ pub struct Context {
     pub cache: FxHashMap<CacheKey, Box<dyn Any>>,
     pub source: Vec<char>,
     pub lr_stack: Vec<CacheKey>,
-    pub call_path: Vec<CacheKey>,
-    pub pending_evictions: FxHashMap<CacheKey, Vec<CacheKey>>,
+    call_path: Vec<CacheKey>,
+    pending_evictions: FxHashMap<CacheKey, Vec<CacheKey>>,
 }
 
 impl Context {
@@ -20,6 +20,19 @@ impl Context {
             call_path: Vec::new(),
             pending_evictions: FxHashMap::default(),
         }
+    }
+
+    pub(crate) fn clone_source(&self) -> String {
+        self.source.iter().collect()
+    }
+
+    pub(crate) fn push_call_path(&mut self, key: CacheKey) {
+        self.call_path.push(key);
+    }
+
+    pub(crate) fn pop_call_path(&mut self, key: CacheKey) {
+        debug_assert_eq!(self.call_path.last(), Some(&key));
+        self.call_path.pop();
     }
 
     pub(crate) fn schedule_cache_eviction(&mut self, key: CacheKey) {

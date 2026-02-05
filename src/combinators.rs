@@ -31,7 +31,7 @@ where
             let (pos, val) = (self.raw_parser)(pos, ctx)?;
             let Some(val) = f(val) else {
                 return Err(ParseError {
-                    source: ctx.source.iter().collect(),
+                    source: ctx.clone_source(),
                     pos,
                     reason: String::from("try map failed: got None"),
                 });
@@ -110,7 +110,7 @@ where
             let (pos, val) = self.parse(pos, ctx)?;
             match ctx.source.get(pos) {
                 Some(c) => Err(ParseError {
-                    source: ctx.source.iter().collect(),
+                    source: ctx.clone_source(),
                     pos,
                     reason: format!("expected EOF found {}", c),
                 }),
@@ -129,12 +129,12 @@ pub fn satisfy(name: impl Into<String>, f: impl Fn(char) -> bool + 'static) -> P
         Rc::new(move |pos, ctx: &mut Context| match ctx.source.get(pos) {
             Some(&c) if f(c) => Ok((pos + 1, c)),
             Some(c) => Err(ParseError {
-                source: ctx.source.iter().collect(),
+                source: ctx.clone_source(),
                 pos,
                 reason: format!("expected {} got {}", name, c),
             }),
             None => Err(ParseError {
-                source: ctx.source.iter().collect(),
+                source: ctx.clone_source(),
                 pos,
                 reason: format!("expected {} got EOF", name),
             }),
@@ -166,7 +166,7 @@ pub fn keyword(keyword: impl Into<String>) -> Parser<String> {
                 Ok((pos + keyword.len(), name.clone()))
             } else {
                 Err(ParseError {
-                    source: ctx.source.iter().collect(),
+                    source: ctx.clone_source(),
                     pos,
                     reason: String::from(""),
                 })

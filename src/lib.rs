@@ -73,7 +73,7 @@ where
                     ctx.schedule_cache_eviction(key);
 
                     return Err(ParseError {
-                        source: ctx.source.iter().collect(),
+                        source: ctx.clone_source(),
                         pos,
                         reason: String::from("failed to resolve left recursion"),
                     });
@@ -86,7 +86,7 @@ where
 
         ctx.cache
             .insert(key, Box::new(CacheEntry::<T>::LeftRecursion));
-        ctx.call_path.push(key);
+        ctx.push_call_path(key);
 
         let mut result = (self.raw_parser)(pos, ctx);
 
@@ -101,8 +101,7 @@ where
             let mut best_res @ Ok((mut best_pos, _)) = result else {
                 let popped = ctx.lr_stack.pop();
                 debug_assert_eq!(popped, Some(key));
-                let popped = ctx.call_path.pop();
-                debug_assert_eq!(popped, Some(key));
+                ctx.pop_call_path(key);
                 return result;
             };
 
@@ -130,8 +129,7 @@ where
             result = best_res
         }
 
-        let popped = ctx.call_path.pop();
-        debug_assert_eq!(popped, Some(key));
+        ctx.pop_call_path(key);
         result
     }
 
